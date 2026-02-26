@@ -62,3 +62,5 @@ python vae_combined.py sample --prior mog --model outputs/models/model_mog.pt --
 ```bash
 python vae_combined.py train --prior gaussian --epochs 2 --batch-size 128
 ```
+
+

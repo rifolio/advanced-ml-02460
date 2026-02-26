@@ -474,7 +474,7 @@ if __name__ == "__main__":
     # Parse arguments
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample'], help='what to do when running the script (default: %(default)s)')
+    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'plot'], help='what to do when running the script (default: %(default)s)')
     parser.add_argument('--output-dir', type=str, default='outputs', help='base directory for models, samples, and plots (default: %(default)s)')
     parser.add_argument('--model', type=str, default=None, help='file to save model to or load model from (default: outputs/models/model_{prior}.pt)')
     parser.add_argument('--samples', type=str, default=None, help='file to save samples in (default: outputs/samples/samples_{prior}.png)')
@@ -483,7 +483,11 @@ if __name__ == "__main__":
     parser.add_argument('--epochs', type=int, default=10, metavar='N', help='number of epochs to train (default: %(default)s)')
     parser.add_argument('--latent-dim', type=int, default=32, metavar='N', help='dimension of latent variable (default: %(default)s)')
     parser.add_argument('--prior', type=str, default='gaussian', choices=['gaussian', 'mog', 'flow'], help='prior distribution (default: %(default)s)')
+    parser.add_argument('--n-runs', type=int, default=3, metavar='N', help='number of training runs per model for reporting mean±std of test log-likelihood (default: %(default)s)')
+    parser.add_argument('--run', type=int, default=1, metavar='N', help='which run to load for sample/plot mode when multiple runs exist (default: %(default)s)')
     parser.add_argument('--plot-loss', type=str, default=None, help='file to save loss curve plot (default: outputs/plots/loss_curve_{prior}.png)')
+    parser.add_argument('--plot-prior-posterior', type=str, default=None, help='file to save prior vs aggregate posterior plot (default: outputs/plots/prior_posterior_{prior}.png)')
+    parser.add_argument('--projection', type=str, default='pca', choices=['first2', 'pca'], help='2D projection for latent space (default: %(default)s)')
     # flow prior settings
     parser.add_argument('--flow-steps', type=int, default=6)
     parser.add_argument('--flow-hidden', type=int, default=128)
@@ -497,6 +501,8 @@ if __name__ == "__main__":
         args.model = os.path.join(models_dir, f'model_{args.prior}.pt')
     if args.plot_loss is None:
         args.plot_loss = os.path.join(plots_dir, f'loss_curve_{args.prior}.png')
+    if args.plot_prior_posterior is None:
+        args.plot_prior_posterior = os.path.join(plots_dir, f'prior_posterior_{args.prior}.png')
     if args.samples is None:
         args.samples = os.path.join(samples_dir, f'samples_{args.prior}.png')
     print('# Options')
@@ -514,105 +520,180 @@ if __name__ == "__main__":
                                                                 transform=transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: (thresshold < x).float().squeeze())])),
                                                     batch_size=args.batch_size, shuffle=True)
 
-    # Define encoder and decoder networks (shared architecture)
     M = args.latent_dim
-    encoder_net = nn.Sequential(
-        nn.Flatten(),
-        nn.Linear(784, 512),
-        nn.ReLU(),
-        nn.Linear(512, 512),
-        nn.ReLU(),
-        nn.Linear(512, M*2),
-    )
 
-    decoder_net = nn.Sequential(
-        nn.Linear(M, 512),
-        nn.ReLU(),
-        nn.Linear(512, 512),
-        nn.ReLU(),
-        nn.Linear(512, 784),
-        nn.Unflatten(-1, (28, 28))
-    )
+    def _path_with_run(path, run_idx):
+        """Add _run{N} suffix before extension for multi-run outputs."""
+        base, ext = os.path.splitext(path)
+        return f"{base}_run{run_idx}{ext}"
 
-    # Define prior and model based on prior type
-    if args.prior == 'gaussian':
-        prior = GaussianPrior(M)
-    elif args.prior == 'mog':
-        prior = MoGPrior(M, K=10, component_std=0.1)
-    elif args.prior == 'flow':
-        base = GaussianBase(M)
-        transformations = []
-        mask = torch.zeros(M)
-        mask[M//2:] = 1
-        for _ in range(args.flow_steps):
-            mask = 1 - mask
-            scale_net = nn.Sequential(
-                nn.Linear(M, args.flow_hidden), nn.ReLU(),
-                nn.Linear(args.flow_hidden, M)
-            )
-            translation_net = nn.Sequential(
-                nn.Linear(M, args.flow_hidden), nn.ReLU(),
-                nn.Linear(args.flow_hidden, M)
-            )
-            transformations.append(MaskedCouplingLayer(scale_net, translation_net, mask))
-        flow = Flow(base, transformations)
-        prior = FlowPrior(flow)
-
-    decoder = BernoulliDecoder(decoder_net)
-    encoder = GaussianEncoder(encoder_net)
-    model = VAE(prior, decoder, encoder).to(device)
-
-    # Choose mode to run
-    if args.mode == 'train':
-        # Define optimizer
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-
-        # Train model
-        train_losses, test_losses = train(
-            model, optimizer, mnist_train_loader, mnist_test_loader, args.epochs, args.device
+    def _build_model():
+        """Build a fresh VAE model from scratch (used for each run)."""
+        # Create new encoder/decoder nets each call so each run starts from random init
+        encoder_net = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(784, 512),
+            nn.ReLU(),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, M * 2),
         )
+        decoder_net = nn.Sequential(
+            nn.Linear(M, 512),
+            nn.ReLU(),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, 784),
+            nn.Unflatten(-1, (28, 28)),
+        )
+        if args.prior == 'gaussian':
+            p = GaussianPrior(M)
+        elif args.prior == 'mog':
+            p = MoGPrior(M, K=10, component_std=0.1)
+        elif args.prior == 'flow':
+            base = GaussianBase(M)
+            transformations = []
+            mask = torch.zeros(M)
+            mask[M//2:] = 1
+            for _ in range(args.flow_steps):
+                mask = 1 - mask
+                scale_net = nn.Sequential(
+                    nn.Linear(M, args.flow_hidden), nn.ReLU(),
+                    nn.Linear(args.flow_hidden, M)
+                )
+                translation_net = nn.Sequential(
+                    nn.Linear(M, args.flow_hidden), nn.ReLU(),
+                    nn.Linear(args.flow_hidden, M)
+                )
+                transformations.append(MaskedCouplingLayer(scale_net, translation_net, mask))
+            flow = Flow(base, transformations)
+            p = FlowPrior(flow)
+        dec = BernoulliDecoder(decoder_net)
+        enc = GaussianEncoder(encoder_net)
+        return VAE(p, dec, enc).to(device)
 
-        # Save model
-        model_dir = os.path.dirname(args.model)
-        if model_dir:
-            os.makedirs(model_dir, exist_ok=True)
-        torch.save(model.state_dict(), args.model)
-
-        # Plot loss curve
-        plot_dir = os.path.dirname(args.plot_loss)
+    def _plot_prior_posterior(model, test_loader, dev, save_path, prior_name, proj, run_idx=None):
+        """Plot prior vs aggregate posterior and save to save_path."""
+        model.eval()
+        latents = []
+        with torch.no_grad():
+            for x, _ in test_loader:
+                q = model.encoder(x.to(dev))
+                latents.append(q.mean)
+        z_posterior = torch.cat(latents, dim=0).cpu().numpy()
+        n_prior_samples = 5000
+        with torch.no_grad():
+            z_prior = model.prior.sample(n_prior_samples).cpu().numpy()
+        if proj == 'first2':
+            prior_2d = z_prior[:, :2]
+            posterior_2d = z_posterior[:, :2]
+        else:
+            center = z_posterior.mean(axis=0)
+            z_centered = z_posterior - center
+            _, _, Vt = torch.linalg.svd(torch.from_numpy(z_centered).float(), full_matrices=False)
+            components = Vt[:2].T.numpy()
+            prior_2d = (z_prior - center) @ components
+            posterior_2d = z_centered @ components
+        plot_dir = os.path.dirname(save_path)
         if plot_dir:
             os.makedirs(plot_dir, exist_ok=True)
-        plt.figure(figsize=(8, 5))
-        plt.plot(train_losses, 'b-', linewidth=2, label='Train')
-        plt.plot(test_losses, 'r-', linewidth=2, label='Test')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss (negative ELBO)')
-        plt.title(f'Train & Test Loss - {args.prior} prior')
+        plt.figure(figsize=(8, 6))
+        plt.scatter(prior_2d[:, 0], prior_2d[:, 1], alpha=0.3, s=10, c='blue', label='Prior p(z)')
+        plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], alpha=0.3, s=10, c='orange', label='Aggregate posterior q(z)')
+        plt.xlabel('Dimension 1')
+        plt.ylabel('Dimension 2')
+        title = f'Prior vs Aggregate Posterior - {prior_name} prior ({proj} projection)'
+        if run_idx is not None:
+            title += f' (run {run_idx})'
+        plt.title(title)
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig(args.plot_loss)
+        plt.savefig(save_path)
         plt.close()
-        print(f"Loss curve saved to {args.plot_loss}")
 
-        # Generate and save samples
-        model.eval()
-        with torch.no_grad():
-            samples = (model.sample(64)).cpu()
-        samples_dir_path = os.path.dirname(args.samples)
-        if samples_dir_path:
-            os.makedirs(samples_dir_path, exist_ok=True)
-        save_image(samples.view(64, 1, 28, 28), args.samples)
-        print(f"Samples saved to {args.samples}")
+    # Choose mode to run
+    if args.mode == 'train':
+        test_elbos = []  # ELBO (log-likelihood approx) per run for reporting mean±std
+
+        for run_idx in range(1, args.n_runs + 1):
+            print(f"\n=== Run {run_idx}/{args.n_runs} ===")
+            model = _build_model()
+            optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+            train_losses, test_losses = train(
+                model, optimizer, mnist_train_loader, mnist_test_loader, args.epochs, args.device
+            )
+            # ELBO = -negative_ELBO; test set log-likelihood approx
+            final_test_elbo = -test_losses[-1]
+            test_elbos.append(final_test_elbo)
+
+            model_path = _path_with_run(args.model, run_idx)
+            model_dir = os.path.dirname(model_path)
+            if model_dir:
+                os.makedirs(model_dir, exist_ok=True)
+            torch.save(model.state_dict(), model_path)
+
+            plot_loss_path = _path_with_run(args.plot_loss, run_idx)
+            plot_dir = os.path.dirname(plot_loss_path)
+            if plot_dir:
+                os.makedirs(plot_dir, exist_ok=True)
+            plt.figure(figsize=(8, 5))
+            plt.plot(train_losses, 'b-', linewidth=2, label='Train')
+            plt.plot(test_losses, 'r-', linewidth=2, label='Test')
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss (negative ELBO)')
+            plt.title(f'Train & Test Loss - {args.prior} prior (run {run_idx})')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(plot_loss_path)
+            plt.close()
+            print(f"Loss curve saved to {plot_loss_path}")
+
+            prior_post_path = _path_with_run(args.plot_prior_posterior, run_idx)
+            _plot_prior_posterior(model, mnist_test_loader, device, prior_post_path, args.prior, args.projection, run_idx)
+            print(f"Prior vs aggregate posterior saved to {prior_post_path}")
+
+            model.eval()
+            with torch.no_grad():
+                samples = (model.sample(64)).cpu()
+            samples_path = _path_with_run(args.samples, run_idx)
+            samples_dir_path = os.path.dirname(samples_path)
+            if samples_dir_path:
+                os.makedirs(samples_dir_path, exist_ok=True)
+            save_image(samples.view(64, 1, 28, 28), samples_path)
+            print(f"Samples saved to {samples_path}")
+
+        if test_elbos:
+            import statistics
+            mean_elbo = statistics.mean(test_elbos)
+            std_elbo = statistics.stdev(test_elbos) if len(test_elbos) > 1 else 0.0
+            print(f"\n=== Test set log-likelihood (ELBO) over {args.n_runs} runs ===")
+            print(f"Mean: {mean_elbo:.4f} ± Std: {std_elbo:.4f}")
 
     elif args.mode == 'sample':
-        model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
-
-        # Generate samples
+        model_path = _path_with_run(args.model, args.run)
+        if not os.path.exists(model_path) and args.run == 1:
+            model_path = args.model  # fallback for legacy models without run suffix
+        model = _build_model()
+        model.load_state_dict(torch.load(model_path, map_location=torch.device(args.device)))
         model.eval()
         with torch.no_grad():
             samples = (model.sample(64)).cpu()
-        samples_dir_path = os.path.dirname(args.samples)
+        samples_path = _path_with_run(args.samples, args.run)
+        samples_dir_path = os.path.dirname(samples_path)
         if samples_dir_path:
             os.makedirs(samples_dir_path, exist_ok=True)
-        save_image(samples.view(64, 1, 28, 28), args.samples)
+        save_image(samples.view(64, 1, 28, 28), samples_path)
+        print(f"Samples saved to {samples_path}")
+
+    elif args.mode == 'plot':
+        model_path = _path_with_run(args.model, args.run)
+        if not os.path.exists(model_path) and args.run == 1:
+            model_path = args.model  # fallback for legacy models without run suffix
+        model = _build_model()
+        model.load_state_dict(torch.load(model_path, map_location=torch.device(args.device)))
+        prior_post_path = _path_with_run(args.plot_prior_posterior, args.run)
+        _plot_prior_posterior(model, mnist_test_loader, device, prior_post_path, args.prior, args.projection, args.run)
+        print(f"Prior vs aggregate posterior plot saved to {prior_post_path}")
