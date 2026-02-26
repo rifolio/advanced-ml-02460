@@ -444,31 +444,36 @@ if __name__ == "__main__":
     from torchvision.utils import save_image, make_grid
     import matplotlib.pyplot as plt
     import glob
+    import os
 
     # Parse arguments
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', type=str, default='train', choices=['train', 'sample'], help='what to do when running the script (default: %(default)s)')
-    parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
-    parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
+    parser.add_argument('--output-dir', type=str, default='outputs', help='base directory for models, samples, and plots (default: %(default)s)')
+    parser.add_argument('--model', type=str, default=None, help='file to save model to or load model from (default: outputs/models/model_{prior}.pt)')
+    parser.add_argument('--samples', type=str, default=None, help='file to save samples in (default: outputs/samples/samples_{prior}.png)')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
     parser.add_argument('--batch-size', type=int, default=32, metavar='N', help='batch size for training (default: %(default)s)')
     parser.add_argument('--epochs', type=int, default=10, metavar='N', help='number of epochs to train (default: %(default)s)')
     parser.add_argument('--latent-dim', type=int, default=32, metavar='N', help='dimension of latent variable (default: %(default)s)')
     parser.add_argument('--prior', type=str, default='gaussian', choices=['gaussian', 'mog', 'flow'], help='prior distribution (default: %(default)s)')
-    parser.add_argument('--plot-loss', type=str, default='loss_curve.png', help='file to save loss curve plot (default: %(default)s)')
+    parser.add_argument('--plot-loss', type=str, default=None, help='file to save loss curve plot (default: outputs/plots/loss_curve_{prior}.png)')
     # flow prior settings
     parser.add_argument('--flow-steps', type=int, default=6)
     parser.add_argument('--flow-hidden', type=int, default=128)
 
     args = parser.parse_args()
-    # Default model path per prior to avoid overwriting
-    if args.model == 'model.pt':
-        args.model = f'model_{args.prior}.pt'
-    if args.plot_loss == 'loss_curve.png':
-        args.plot_loss = f'loss_curve_{args.prior}.png'
-    if args.samples == 'samples.png':
-        args.samples = f'samples_{args.prior}.png'
+    # Default paths: save into output_dir subfolders
+    models_dir = os.path.join(args.output_dir, 'models')
+    samples_dir = os.path.join(args.output_dir, 'samples')
+    plots_dir = os.path.join(args.output_dir, 'plots')
+    if args.model is None:
+        args.model = os.path.join(models_dir, f'model_{args.prior}.pt')
+    if args.plot_loss is None:
+        args.plot_loss = os.path.join(plots_dir, f'loss_curve_{args.prior}.png')
+    if args.samples is None:
+        args.samples = os.path.join(samples_dir, f'samples_{args.prior}.png')
     print('# Options')
     for key, value in sorted(vars(args).items()):
         print(key, '=', value)
@@ -541,9 +546,15 @@ if __name__ == "__main__":
         losses = train(model, optimizer, mnist_train_loader, args.epochs, args.device)
 
         # Save model
+        model_dir = os.path.dirname(args.model)
+        if model_dir:
+            os.makedirs(model_dir, exist_ok=True)
         torch.save(model.state_dict(), args.model)
 
         # Plot loss curve
+        plot_dir = os.path.dirname(args.plot_loss)
+        if plot_dir:
+            os.makedirs(plot_dir, exist_ok=True)
         plt.figure(figsize=(8, 5))
         plt.plot(losses, 'b-', linewidth=2)
         plt.xlabel('Epoch')
@@ -559,6 +570,9 @@ if __name__ == "__main__":
         model.eval()
         with torch.no_grad():
             samples = (model.sample(64)).cpu()
+        samples_dir_path = os.path.dirname(args.samples)
+        if samples_dir_path:
+            os.makedirs(samples_dir_path, exist_ok=True)
         save_image(samples.view(64, 1, 28, 28), args.samples)
         print(f"Samples saved to {args.samples}")
 
@@ -568,5 +582,8 @@ if __name__ == "__main__":
         # Generate samples
         model.eval()
         with torch.no_grad():
-            samples = (model.sample(64)).cpu() 
-            save_image(samples.view(64, 1, 28, 28), args.samples)
+            samples = (model.sample(64)).cpu()
+        samples_dir_path = os.path.dirname(args.samples)
+        if samples_dir_path:
+            os.makedirs(samples_dir_path, exist_ok=True)
+        save_image(samples.view(64, 1, 28, 28), args.samples)
