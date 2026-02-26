@@ -1,0 +1,259 @@
+# Code for DTU course 02460 (Advanced Machine Learning Spring) by Jes Frellsen, 2024
+# Version 1.0 (2024-02-11)
+
+import torch
+import torch.nn as nn
+import torch.distributions as td
+import torch.nn.functional as F
+import torchvision
+from tqdm import tqdm
+from unet import Unet
+
+
+class DDPM(nn.Module):
+    def __init__(self, network, beta_1=1e-4, beta_T=2e-2, T=100):
+        """
+        Initialize a DDPM model.
+
+        Parameters:
+        network: [nn.Module]
+            The network to use for the diffusion process.
+        beta_1: [float]
+            The noise at the first step of the diffusion process.
+        beta_T: [float]
+            The noise at the last step of the diffusion process.
+        T: [int]
+            The number of steps in the diffusion process.
+        """
+        super(DDPM, self).__init__()
+        self.network = network
+        self.beta_1 = beta_1
+        self.beta_T = beta_T
+        self.T = T
+
+        self.beta = nn.Parameter(torch.linspace(beta_1, beta_T, T), requires_grad=False)
+        self.alpha = nn.Parameter(1 - self.beta, requires_grad=False)
+        self.alpha_cumprod = nn.Parameter(self.alpha.cumprod(dim=0), requires_grad=False)
+    
+    def negative_elbo(self, x):
+        """
+        Evaluate the DDPM negative ELBO on a batch of data.
+
+        Parameters:
+        x: [torch.Tensor]
+            A batch of data (x) of dimension `(batch_size, *)`.
+        Returns:
+        [torch.Tensor]
+            The negative ELBO of the batch of dimension `(batch_size,)`.
+        """
+
+        ### Implement Algorithm 1 here ###
+        epsilon = torch.randn_like(x)
+        t = torch.randint(0, self.T, (x.shape[0],), device=x.device)
+        t_norm = t.float() / (self.T - 1)
+        t_norm = t_norm.unsqueeze(1)
+        alpha_cumprod_t = self.alpha_cumprod[t].unsqueeze(1)
+
+        network_input = torch.sqrt(alpha_cumprod_t) * x + torch.sqrt(1 - alpha_cumprod_t) * epsilon
+        neg_elbo = (epsilon - self.network(network_input, t_norm)).square().sum(dim=1)
+
+        return neg_elbo
+
+    def sample(self, shape):
+        """
+        Sample from the model.
+
+        Parameters:
+        shape: [tuple]
+            The shape of the samples to generate.
+        Returns:
+        [torch.Tensor]
+            The generated samples.
+        """
+        # Sample x_t for t=T (i.e., Gaussian noise)
+        x_t = torch.randn(shape).to(self.alpha.device)
+
+        # Sample x_t given x_{t+1} until x_0 is sampled
+        for t in range(self.T-1, -1, -1): # Inverse loop from T-1 to 0
+            ### Implement the remaining of Algorithm 2 here ###
+            if t > 0:
+                t_norm = torch.full((shape[0], 1), t / (self.T - 1), device=self.alpha.device)
+                epsilon_theta = self.network(x_t, t_norm)
+                mean = (x_t - (1 - self.alpha[t]) / torch.sqrt(1 - self.alpha_cumprod[t]) * epsilon_theta) / torch.sqrt(self.alpha[t])
+                variance = self.beta[t]
+                x_t = mean + torch.sqrt(variance) * torch.randn_like(x_t)
+            else:
+                t_norm = torch.full((shape[0], 1), t / (self.T - 1), device=self.alpha.device)
+                epsilon_theta = self.network(x_t, t_norm)
+                mean = (x_t - (1 - self.alpha[t]) / torch.sqrt(1 - self.alpha_cumprod[t]) * epsilon_theta) / torch.sqrt(self.alpha[t])
+                x_t = mean # When t=0, we do not add noise
+
+        return x_t
+
+    def loss(self, x):
+        """
+        Evaluate the DDPM loss on a batch of data.
+
+        Parameters:
+        x: [torch.Tensor]
+            A batch of data (x) of dimension `(batch_size, *)`.
+        Returns:
+        [torch.Tensor]
+            The loss for the batch.
+        """
+        return self.negative_elbo(x).mean()
+
+
+def train(model, optimizer, data_loader, epochs, device):
+    """
+    Train a Flow model.
+
+    Parameters:
+    model: [Flow]
+       The model to train.
+    optimizer: [torch.optim.Optimizer]
+         The optimizer to use for training.
+    data_loader: [torch.utils.data.DataLoader]
+            The data loader to use for training.
+    epochs: [int]
+        Number of epochs to train for.
+    device: [torch.device]
+        The device to use for training.
+    """
+    model.train()
+
+    total_steps = len(data_loader)*epochs
+    progress_bar = tqdm(range(total_steps), desc="Training")
+
+    losses = []
+    epoch_loss = 0
+    for epoch in range(epochs):
+        data_iter = iter(data_loader)
+        for x in data_iter:
+            if isinstance(x, (list, tuple)):
+                x = x[0]
+            x = x.to(device)
+            optimizer.zero_grad()
+            loss = model.loss(x)
+            loss.backward()
+            optimizer.step()
+
+            epoch_loss += loss.item()
+
+
+        epoch_loss /= len(data_loader)
+        # Update progress bar
+        progress_bar.set_postfix(loss=f"⠀{epoch_loss:12.4f}", epoch=f"{epoch+1}/{epochs}")
+        progress_bar.update()
+        losses.append(epoch_loss)
+        epoch_loss = 0
+        
+    return losses
+
+if __name__ == "__main__":
+    import torch.utils.data
+    from torchvision import datasets, transforms
+    from torchvision.utils import save_image
+
+    # Parse arguments
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'debug'], help='what to do when running the script (default: %(default)s)')
+    parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
+    parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
+    parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
+    parser.add_argument('--batch-size', type=int, default=64, metavar='N', help='batch size for training (default: %(default)s)')
+    parser.add_argument('--epochs', type=int, default=1, metavar='N', help='number of epochs to train (default: %(default)s)')
+    parser.add_argument('--lr', type=float, default=1e-3, metavar='V', help='learning rate for training (default: %(default)s)')
+
+    args = parser.parse_args()
+    print('# Options')
+    for key, value in sorted(vars(args).items()):
+        print(key, '=', value)
+
+    if args.mode == 'train':
+        network = Unet()
+
+        # Set the number of steps in the diffusion process
+        T = 1000
+
+        # Define model
+        model = DDPM(network, T=T).to(args.device)
+
+        transform = transforms.Compose([ transforms.ToTensor() ,
+                        transforms.Lambda( lambda x : x + torch.rand ( x.shape ) /255),
+                        transforms.Lambda( lambda x : (x -0.5) *2.0),
+                        transforms.Lambda( lambda x : x.flatten () ) ]
+                        )
+        
+        train_data = datasets.MNIST('data/',
+                        train=True,
+                        download=True,
+                        transform=transform
+                        )
+        
+        train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
+
+        # Set the number of steps in the diffusion process
+        T = 1000
+
+        # Define model
+        model = DDPM(network, T=T).to(args.device)
+
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+        # Train model
+        losses = train(model, optimizer, train_loader, args.epochs, args.device)
+
+        # Plot training loss
+        import matplotlib.pyplot as plt
+        plt.plot(losses)
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("Training Loss")
+        plt.savefig("training_loss.png")
+        plt.close()
+
+        # Save model
+        torch.save(model.state_dict(), args.model)
+    
+    elif args.mode == 'debug':
+        # Debug negative ELBO
+        network = Unet()
+        D = 28*28
+        model = DDPM(network, T=100)
+        x = torch.randn((100, D))
+        neg_elbo = model.negative_elbo(x)
+        print(f"Negative ELBO: {neg_elbo.mean().item():.4f}")
+    
+    elif args.mode == 'sample':
+        import matplotlib.pyplot as plt
+        num_hidden = 1024
+        D = 28*28
+        # network = FcNetwork(D, num_hidden)
+        network = Unet()
+
+        # Set the number of steps in the diffusion process
+        T = 1000
+
+        # Define model
+        model = DDPM(network, T=T).to(args.device)
+
+        # Load the model
+        model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
+
+        # Generate samples
+        model.eval()
+        with torch.no_grad():
+            samples = (model.sample((4, D))).cpu() 
+
+        # Transform the samples back to the original space
+        samples = samples /2 + 0.5
+        samples = samples.view(-1, 1, 28, 28)
+
+        # Plot first samples
+        fig, axes = plt.subplots(1, 4, figsize=(5, 5))
+        for i in range(4):
+            axes[i].imshow(samples[i].squeeze(), cmap='gray')
+            axes[i].axis('off')
+        plt.savefig(args.samples)
+        plt.close()
