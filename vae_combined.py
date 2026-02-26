@@ -481,7 +481,7 @@ if __name__ == "__main__":
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
     parser.add_argument('--batch-size', type=int, default=32, metavar='N', help='batch size for training (default: %(default)s)')
     parser.add_argument('--epochs', type=int, default=10, metavar='N', help='number of epochs to train (default: %(default)s)')
-    parser.add_argument('--latent-dim', type=int, default=32, metavar='N', help='dimension of latent variable (default: %(default)s)')
+    parser.add_argument('--latent-dim', type=int, default=64, metavar='N', help='dimension of latent variable (default: %(default)s)')
     parser.add_argument('--prior', type=str, default='gaussian', choices=['gaussian', 'mog', 'flow'], help='prior distribution (default: %(default)s)')
     parser.add_argument('--n-runs', type=int, default=3, metavar='N', help='number of training runs per model for reporting mean±std of test log-likelihood (default: %(default)s)')
     parser.add_argument('--run', type=int, default=1, metavar='N', help='which run to load for sample/plot mode when multiple runs exist (default: %(default)s)')

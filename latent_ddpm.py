@@ -167,7 +167,7 @@ if __name__ == "__main__":
     parser.add_argument('--epochs', type=int, default=1, metavar='N', help='number of epochs to train (default: %(default)s)')
     parser.add_argument('--lr', type=float, default=1e-3, metavar='V', help='learning rate for training (default: %(default)s)')
     parser.add_argument('--prior', type=str, default='gaussian', choices=['gaussian'], help='prior type (default: %(default)s)')
-    parser.add_argument('--latent-dim', type=int, default=32, help='latent dimension (default: %(default)s)')
+    parser.add_argument('--latent-dim', type=int, default=64, help='latent dimension (default: %(default)s)')
     parser.add_argument('--mnist-type', type=str, default='original', choices=['binary', 'original'], help='type of MNIST data (default: %(default)s)')
 
     args = parser.parse_args()
