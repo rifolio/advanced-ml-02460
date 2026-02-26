@@ -133,7 +133,7 @@ class VAE(nn.Module):
     """
     Define a Variational Autoencoder (VAE) model.
     """
-    def __init__(self, prior, decoder, encoder):
+    def __init__(self, prior, decoder, encoder, beta):
         """
         Parameters:
         prior: [torch.nn.Module] 
@@ -148,6 +148,7 @@ class VAE(nn.Module):
         self.prior = prior
         self.decoder = decoder
         self.encoder = encoder
+        self.beta = beta
 
     def elbo(self, x):
         """
@@ -164,7 +165,7 @@ class VAE(nn.Module):
         reconstruction = self.decoder(z).log_prob(x)
         log_qz = q.log_prob(z)
         log_pz = self.prior.log_prob(z)
-        elbo = (reconstruction + log_pz - log_qz).mean()
+        elbo = (reconstruction + self.beta * (log_pz - log_qz)).mean()
         return elbo
 
     def sample(self, n_samples=1):
@@ -488,6 +489,8 @@ if __name__ == "__main__":
     parser.add_argument('--plot-loss', type=str, default=None, help='file to save loss curve plot (default: outputs/plots/loss_curve_{prior}.png)')
     parser.add_argument('--plot-prior-posterior', type=str, default=None, help='file to save prior vs aggregate posterior plot (default: outputs/plots/prior_posterior_{prior}.png)')
     parser.add_argument('--projection', type=str, default='pca', choices=['first2', 'pca'], help='2D projection for latent space (default: %(default)s)')
+    parser.add_argument('--beta', type=str, default='1', help='beta value for VAE (default: %(default)s)')
+
     # flow prior settings
     parser.add_argument('--flow-steps', type=int, default=6)
     parser.add_argument('--flow-hidden', type=int, default=128)
@@ -570,7 +573,7 @@ if __name__ == "__main__":
             p = FlowPrior(flow)
         dec = BernoulliDecoder(decoder_net)
         enc = GaussianEncoder(encoder_net)
-        return VAE(p, dec, enc).to(device)
+        return VAE(p, dec, enc, args.beta).to(device)
 
     def _plot_prior_posterior(model, test_loader, dev, save_path, prior_name, proj, run_idx=None):
         """Plot prior vs aggregate posterior and save to save_path."""
