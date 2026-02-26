@@ -123,7 +123,7 @@ def train(model, optimizer, data_loader, epochs, device):
     model.train()
 
     total_steps = len(data_loader)*epochs
-    progress_bar = tqdm(range(total_steps), desc="Training")
+    progress_bar = tqdm(range(epochs), desc="Training")
 
     losses = []
     epoch_loss = 0
@@ -215,17 +215,13 @@ if __name__ == "__main__":
         for x, _ in tqdm(mnist_train_loader, desc="Encoding training data with VAE"):
             x = x.to(args.device)
             z = vae_model.encoder(x)
-            print(z.shape) # Should be (batch_size, latent_dim*2)
-            exit()
             z = z.rsample() # Sample from the encoder distribution
-            z = nn.Unflatten(-1, (6,6))(z)
-            print(z.shape)
-            exit()
+            z = nn.Unflatten(-1, (8,8))(z)
             train_data.append(z.cpu())
-        train_data = torch.cat(train_data, dim=0)
-        print(f"Encoded training data shape: {train_data.shape}") # Should be (num_samples, latent_dim)
-        print(f"First 5 latent representations:\n{train_data[:5]}")
-        exit()
+        train_data = torch.cat(train_data, dim=0).unsqueeze(1) # Shape: (num_samples, 1, latent_dim)
+        print(f"Encoded training data shape: {train_data.shape}") # Should be (num_samples, 1, latent_dim)
+        latent_dataset = torch.utils.data.TensorDataset(train_data)
+        latent_loader = torch.utils.data.DataLoader(latent_dataset, batch_size=args.batch_size, shuffle=True)
 
         # DDPM network
         network = Unet()
@@ -236,8 +232,6 @@ if __name__ == "__main__":
         # Define model
         model = DDPM(network, T=T).to(args.device)
         
-        train_loader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
-
         # Set the number of steps in the diffusion process
         T = 1000
 
@@ -246,7 +240,7 @@ if __name__ == "__main__":
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
         # Train model
-        losses = train(model, optimizer, train_loader, args.epochs, args.device)
+        losses = train(model, optimizer, latent_loader, args.epochs, args.device)
 
         # Plot training loss
         import matplotlib.pyplot as plt
@@ -271,8 +265,7 @@ if __name__ == "__main__":
     
     elif args.mode == 'sample':
         import matplotlib.pyplot as plt
-        num_hidden = 1024
-        D = 28*28
+        D = 64
         # network = FcNetwork(D, num_hidden)
         network = Unet()
 
@@ -290,10 +283,41 @@ if __name__ == "__main__":
         with torch.no_grad():
             samples = (model.sample((4, D))).cpu() 
 
-        # Transform the samples back to the original space
-        samples = samples /2 + 0.5
-        samples = samples.view(-1, 1, 28, 28)
+        # Pass samples to decoder to get images
+        # Loading VAE model
+        M = args.latent_dim
+        if args.prior == 'gaussian':
+            prior = GaussianPrior(M)
 
+        # Define encoder and decoder networks
+        encoder_net = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(784, 512),
+            nn.ReLU(),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, M*2),
+        )
+
+        decoder_net = nn.Sequential(
+            nn.Linear(M, 512),
+            nn.ReLU(),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, 784),
+            nn.Unflatten(-1, (28, 28))
+        )
+
+        # Define VAE model
+        encoder = GaussianEncoder(encoder_net)
+        decoder = BernoulliDecoder(decoder_net, out_type=args.mnist_type)
+        vae_model = VAE(prior, decoder, encoder, prior_type=args.prior).to(args.device)
+        vae_model.load_state_dict(torch.load(args.vae_model, map_location=torch.device(args.device)))
+
+        vae_model.eval()
+        with torch.no_grad():
+            samples = vae_model.decoder(samples.to(args.device)).cpu()
+        
         # Plot first samples
         fig, axes = plt.subplots(1, 4, figsize=(5, 5))
         for i in range(4):
