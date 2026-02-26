@@ -189,7 +189,7 @@ class VAE(nn.Module):
         return -self.elbo(x)
 
 
-def train(model, optimizer, data_loader, epochs, device):
+def train(model, optimizer, train_loader, test_loader, epochs, device):
     """
     Train a VAE model.
 
@@ -198,39 +198,64 @@ def train(model, optimizer, data_loader, epochs, device):
        The VAE model to train.
     optimizer: [torch.optim.Optimizer]
          The optimizer to use for training.
-    data_loader: [torch.utils.data.DataLoader]
+    train_loader: [torch.utils.data.DataLoader]
             The data loader to use for training.
+    test_loader: [torch.utils.data.DataLoader]
+            The data loader to use for evaluation.
     epochs: [int]
         Number of epochs to train for.
     device: [torch.device]
         The device to use for training.
 
     Returns:
-    losses: [list of float]
-        Mean loss (negative ELBO) per epoch.
+    train_losses: [list of float]
+        Mean training loss (negative ELBO) per epoch.
+    test_losses: [list of float]
+        Mean test loss (negative ELBO) per epoch.
     """
-    model.train()
-    losses = []
+    train_losses = []
+    test_losses = []
 
-    total_steps = len(data_loader)*epochs
+    total_steps = len(train_loader) * epochs
     progress_bar = tqdm(range(total_steps), desc="Training")
 
     for epoch in range(epochs):
-        epoch_losses = []
-        data_iter = iter(data_loader)
-        for x in data_iter:
+        # Training
+        model.train()
+        epoch_train_losses = []
+        for x in train_loader:
             x = x[0].to(device)
             optimizer.zero_grad()
             loss = model(x)
             loss.backward()
             optimizer.step()
-            epoch_losses.append(loss.item())
+            epoch_train_losses.append(loss.item())
 
-            # Update progress bar
-            progress_bar.set_postfix(loss=f"⠀{loss.item():12.4f}", epoch=f"{epoch+1}/{epochs}")
+            progress_bar.set_postfix(
+                train_loss=f"{loss.item():.4f}",
+                epoch=f"{epoch+1}/{epochs}"
+            )
             progress_bar.update()
-        losses.append(sum(epoch_losses) / len(epoch_losses))
-    return losses
+
+        train_losses.append(sum(epoch_train_losses) / len(epoch_train_losses))
+
+        # Evaluation on test set
+        model.eval()
+        epoch_test_losses = []
+        with torch.no_grad():
+            for x in test_loader:
+                x = x[0].to(device)
+                loss = model(x)
+                epoch_test_losses.append(loss.item())
+
+        test_losses.append(sum(epoch_test_losses) / len(epoch_test_losses))
+        progress_bar.set_postfix(
+            train_loss=f"{train_losses[-1]:.4f}",
+            test_loss=f"{test_losses[-1]:.4f}",
+            epoch=f"{epoch+1}/{epochs}"
+        )
+
+    return train_losses, test_losses
 
 
 # =============================================================================
@@ -543,7 +568,9 @@ if __name__ == "__main__":
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
         # Train model
-        losses = train(model, optimizer, mnist_train_loader, args.epochs, args.device)
+        train_losses, test_losses = train(
+            model, optimizer, mnist_train_loader, mnist_test_loader, args.epochs, args.device
+        )
 
         # Save model
         model_dir = os.path.dirname(args.model)
@@ -556,10 +583,12 @@ if __name__ == "__main__":
         if plot_dir:
             os.makedirs(plot_dir, exist_ok=True)
         plt.figure(figsize=(8, 5))
-        plt.plot(losses, 'b-', linewidth=2)
+        plt.plot(train_losses, 'b-', linewidth=2, label='Train')
+        plt.plot(test_losses, 'r-', linewidth=2, label='Test')
         plt.xlabel('Epoch')
         plt.ylabel('Loss (negative ELBO)')
-        plt.title(f'Training Loss - {args.prior} prior')
+        plt.title(f'Train & Test Loss - {args.prior} prior')
+        plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.savefig(args.plot_loss)
