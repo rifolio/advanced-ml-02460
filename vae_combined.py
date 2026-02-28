@@ -489,7 +489,7 @@ if __name__ == "__main__":
     parser.add_argument('--plot-loss', type=str, default=None, help='file to save loss curve plot (default: outputs/plots/loss_curve_{prior}.png)')
     parser.add_argument('--plot-prior-posterior', type=str, default=None, help='file to save prior vs aggregate posterior plot (default: outputs/plots/prior_posterior_{prior}.png)')
     parser.add_argument('--projection', type=str, default='pca', choices=['first2', 'pca'], help='2D projection for latent space (default: %(default)s)')
-    parser.add_argument('--beta', type=str, default='1', help='beta value for VAE (default: %(default)s)')
+    parser.add_argument('--beta', type=float, default='1', help='beta value for VAE (default: %(default)s)')
 
     # flow prior settings
     parser.add_argument('--flow-steps', type=int, default=6)
