@@ -127,6 +127,34 @@ class BernoulliDecoder(nn.Module):
         """
         logits = self.decoder_net(z)
         return td.Independent(td.Bernoulli(logits=logits), 2)
+    
+
+class GaussianDecoder(nn.Module):
+    def __init__(self, decoder_net):
+        """
+        Define a Gaussian decoder distribution based on a given decoder network.
+
+        Parameters: 
+        encoder_net: [torch.nn.Module]             
+           The decoder network that takes as a tensor of dim `(batch_size, M) as
+           input, where M is the dimension of the latent space, and outputs a
+           tensor of dimension (batch_size, feature_dim1, feature_dim2).
+        """
+        super(GaussianDecoder, self).__init__()
+        self.decoder_net = decoder_net
+        self.log_std = nn.Parameter(torch.zeros(28, 28), requires_grad=True)
+
+    def forward(self, z):
+        """
+        Given a batch of latent variables, return a Gaussian distribution over the data space.
+
+        Parameters:
+        z: [torch.Tensor] 
+           A tensor of dimension `(batch_size, M)`, where M is the dimension of the latent space.
+        """
+        mu = torch.sigmoid(self.decoder_net(z))   # [0,1]
+        std = torch.exp(self.log_std).clamp(min=1e-4, max=1e4)
+        return td.Independent(td.Normal(loc=mu, scale=std), 2)
 
 
 class VAE(nn.Module):
@@ -490,6 +518,7 @@ if __name__ == "__main__":
     parser.add_argument('--plot-prior-posterior', type=str, default=None, help='file to save prior vs aggregate posterior plot (default: outputs/plots/prior_posterior_{prior}.png)')
     parser.add_argument('--projection', type=str, default='pca', choices=['first2', 'pca'], help='2D projection for latent space (default: %(default)s)')
     parser.add_argument('--beta', type=float, default='1', help='beta value for VAE (default: %(default)s)')
+    parser.add_argument('--mnist-type', type=str, default='binarized', choices=['binarized', 'original'], help='type of MNIST dataset to use (default: %(default)s)')
 
     # flow prior settings
     parser.add_argument('--flow-steps', type=int, default=6)
@@ -516,11 +545,16 @@ if __name__ == "__main__":
 
     # Load MNIST as binarized at 'thresshold' and create data loaders
     thresshold = 0.5
+    if args.mnist_type == 'binarized':
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: (thresshold < x).float().squeeze())])
+    else:
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: x.squeeze())])
+
     mnist_train_loader = torch.utils.data.DataLoader(datasets.MNIST('data/', train=True, download=True,
-                                                                    transform=transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: (thresshold < x).float().squeeze())])),
+                                                                    transform=transform),
                                                     batch_size=args.batch_size, shuffle=True)
     mnist_test_loader = torch.utils.data.DataLoader(datasets.MNIST('data/', train=False, download=True,
-                                                                transform=transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: (thresshold < x).float().squeeze())])),
+                                                                transform=transform),
                                                     batch_size=args.batch_size, shuffle=True)
 
     M = args.latent_dim
@@ -571,7 +605,11 @@ if __name__ == "__main__":
                 transformations.append(MaskedCouplingLayer(scale_net, translation_net, mask))
             flow = Flow(base, transformations)
             p = FlowPrior(flow)
-        dec = BernoulliDecoder(decoder_net)
+        
+        if args.mnist_type == 'binarized':
+            dec = BernoulliDecoder(decoder_net)
+        else:
+            dec = GaussianDecoder(decoder_net)
         enc = GaussianEncoder(encoder_net)
         return VAE(p, dec, enc, args.beta).to(device)
 
