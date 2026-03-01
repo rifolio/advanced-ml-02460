@@ -123,7 +123,7 @@ def train(model, optimizer, data_loader, epochs, device):
     model.train()
 
     total_steps = len(data_loader)*epochs
-    progress_bar = tqdm(range(total_steps), desc="Training")
+    progress_bar = tqdm(range(epochs), desc="Training")
 
     losses = []
     epoch_loss = 0

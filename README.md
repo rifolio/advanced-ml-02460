@@ -63,6 +63,21 @@ python vae_combined.py sample --prior mog --model outputs/models/model_mog.pt --
 python vae_combined.py train --prior gaussian --epochs 2 --batch-size 128
 ```
 
+## DDPM
+Run the DDPM to generate mnist samples.
+
+### Training
+
+```bash
+python ddpm.py train --batch-size 256 --epochs 20
+```
+
+### Sampling
+
+```bash
+python ddpm.py sample --batch-size 256 
+```
+
 
 ## Latent DDPM
 Run the latent DDPM using the trained VAE encoder to generate samples in the latent space.
@@ -76,5 +91,5 @@ python latent_ddpm.py train --vae-model outputs/models/model_gaussian_run1.pt --
 ### Sampling
 
 ```bash
-python latent_ddpm.py sample --vae-model outputs/models/model_gaussian_run1.pt --batch-size 256 --epochs 50
+python latent_ddpm.py sample --vae-model outputs/models/model_gaussian_run1.pt --batch-size 256 
 ```

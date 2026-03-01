@@ -7,7 +7,7 @@ import torch.distributions as td
 import torch.nn.functional as F
 import torchvision
 from tqdm import tqdm
-from unet import Unet
+from unet import LatentUnet
 from vae_combined import VAE, GaussianPrior, GaussianEncoder, BernoulliDecoder, GaussianDecoder
 
 class DDPM(nn.Module):
@@ -229,7 +229,7 @@ if __name__ == "__main__":
         latent_loader = torch.utils.data.DataLoader(latent_dataset, batch_size=args.batch_size, shuffle=True)
 
         # DDPM network
-        network = Unet()
+        network = LatentUnet()
 
         # Set the number of steps in the diffusion process
         T = 1000
@@ -253,20 +253,11 @@ if __name__ == "__main__":
         # Save model
         torch.save(model.state_dict(), args.model)
     
-    elif args.mode == 'debug':
-        # Debug negative ELBO
-        network = Unet()
-        D = 28*28
-        model = DDPM(network, T=100)
-        x = torch.randn((100, D))
-        neg_elbo = model.negative_elbo(x)
-        print(f"Negative ELBO: {neg_elbo.mean().item():.4f}")
-    
     elif args.mode == 'sample':
         import matplotlib.pyplot as plt
         D = 64
         # network = FcNetwork(D, num_hidden)
-        network = Unet()
+        network = LatentUnet()
 
         # Set the number of steps in the diffusion process
         T = 1000
@@ -322,14 +313,23 @@ if __name__ == "__main__":
 
         vae_model.eval()
         with torch.no_grad():
-            samples = vae_model.decoder(samples.to(args.device)).sample().cpu() # Shape: (4, 1, 28, 28)
-        
+            samples = vae_model.decoder(samples.to(args.device)).sample().cpu() # Shape: (4, 28, 28)
+            mean_samples = vae_model.decoder.mu.cpu() # Shape: (4, 28, 28)
+
         samples = samples.clamp(0, 1)
-        print(f"Decoded samples shape: {samples.shape}") # Should be (4, 28, 28)
+
         # Plot first samples
         fig, axes = plt.subplots(1, 4, figsize=(5, 5))
         for i in range(4):
             axes[i].imshow(samples[i].squeeze(), cmap='gray')
             axes[i].axis('off')
         plt.savefig(args.samples)
+        plt.close()
+
+        # Plot mean samples
+        fig, axes = plt.subplots(1, 4, figsize=(5, 5))
+        for i in range(4):
+            axes[i].imshow(mean_samples[i].squeeze(), cmap='gray')
+            axes[i].axis('off')
+        plt.savefig("mean_" + args.samples)
         plt.close()

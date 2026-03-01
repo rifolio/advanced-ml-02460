@@ -143,6 +143,7 @@ class GaussianDecoder(nn.Module):
         super(GaussianDecoder, self).__init__()
         self.decoder_net = decoder_net
         self.log_std = nn.Parameter(torch.zeros(28, 28), requires_grad=True)
+        self.mu = None
 
     def forward(self, z):
         """
@@ -152,9 +153,9 @@ class GaussianDecoder(nn.Module):
         z: [torch.Tensor] 
            A tensor of dimension `(batch_size, M)`, where M is the dimension of the latent space.
         """
-        mu = torch.sigmoid(self.decoder_net(z))   # [0,1]
+        self.mu = torch.sigmoid(self.decoder_net(z))   # [0,1]
         std = torch.exp(self.log_std).clamp(min=1e-4, max=1e4)
-        return td.Independent(td.Normal(loc=mu, scale=std), 2)
+        return td.Independent(td.Normal(loc=self.mu, scale=std), 2)
 
 
 class VAE(nn.Module):
