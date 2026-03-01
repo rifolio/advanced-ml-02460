@@ -64,3 +64,17 @@ python vae_combined.py train --prior gaussian --epochs 2 --batch-size 128
 ```
 
 
+## Latent DDPM
+Run the latent DDPM using the trained VAE encoder to generate samples in the latent space.
+
+### Training
+
+```bash
+python latent_ddpm.py train --vae-model outputs/models/model_gaussian_run1.pt --batch-size 256 --epochs 50
+```
+
+### Sampling
+
+```bash
+python latent_ddpm.py sample --vae-model outputs/models/model_gaussian_run1.pt --batch-size 256 --epochs 50
+```
