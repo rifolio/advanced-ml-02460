@@ -324,6 +324,7 @@ if __name__ == "__main__":
         with torch.no_grad():
             samples = vae_model.decoder(samples.to(args.device)).sample().cpu() # Shape: (4, 1, 28, 28)
         
+        samples = samples.clamp(0, 1)
         print(f"Decoded samples shape: {samples.shape}") # Should be (4, 28, 28)
         # Plot first samples
         fig, axes = plt.subplots(1, 4, figsize=(5, 5))
