@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import torchvision
 from tqdm import tqdm
 from unet import Unet
-from vae_bernoulli import VAE, GaussianPrior, GaussianEncoder, BernoulliDecoder, IdentityTransform
+from vae_combined import VAE, GaussianPrior, GaussianEncoder, BernoulliDecoder, GaussianDecoder
 
 class DDPM(nn.Module):
     def __init__(self, network, beta_1=1e-4, beta_T=2e-2, T=100):
@@ -52,10 +52,10 @@ class DDPM(nn.Module):
         t = torch.randint(0, self.T, (x.shape[0],), device=x.device)
         t_norm = t.float() / (self.T - 1)
         t_norm = t_norm.unsqueeze(1)
-        alpha_cumprod_t = self.alpha_cumprod[t].unsqueeze(1)
+        alpha_cumprod_t = self.alpha_cumprod[t].view(-1, 1, 1, 1) # Reshape to (batch_size, 1, 1, 1) for broadcasting
 
         network_input = torch.sqrt(alpha_cumprod_t) * x + torch.sqrt(1 - alpha_cumprod_t) * epsilon
-        neg_elbo = (epsilon - self.network(network_input, t_norm)).square().sum(dim=1)
+        neg_elbo = (epsilon - self.network(network_input, t_norm)).square().sum(dim=(1, 2, 3))
 
         return neg_elbo
 
@@ -169,6 +169,7 @@ if __name__ == "__main__":
     parser.add_argument('--prior', type=str, default='gaussian', choices=['gaussian'], help='prior type (default: %(default)s)')
     parser.add_argument('--latent-dim', type=int, default=64, help='latent dimension (default: %(default)s)')
     parser.add_argument('--mnist-type', type=str, default='original', choices=['binary', 'original'], help='type of MNIST data (default: %(default)s)')
+    parser.add_argument('--beta', type=float, default='1', help='beta value for VAE (default: %(default)s)')
 
     args = parser.parse_args()
     print('# Options')
@@ -203,11 +204,15 @@ if __name__ == "__main__":
 
         # Define VAE model
         encoder = GaussianEncoder(encoder_net)
-        decoder = BernoulliDecoder(decoder_net, out_type=args.mnist_type)
-        vae_model = VAE(prior, decoder, encoder, prior_type=args.prior).to(args.device)
+        if args.mnist_type == 'binarized':
+            decoder = BernoulliDecoder(decoder_net)
+        else:            
+            decoder = GaussianDecoder(decoder_net)
+
+        vae_model = VAE(prior, decoder, encoder, beta=args.beta).to(args.device)
         vae_model.load_state_dict(torch.load(args.vae_model, map_location=torch.device(args.device)))
 
-        transform = transforms.Compose([transforms.ToTensor(), IdentityTransform()])
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: x.squeeze())])
 
         mnist_train_loader = torch.utils.data.DataLoader(datasets.MNIST('data/', train=True, download=True, transform=transform))
         # Pre-compute the latent representations of the training data using the VAE encoder
@@ -217,7 +222,7 @@ if __name__ == "__main__":
             z = vae_model.encoder(x)
             z = z.rsample() # Sample from the encoder distribution
             z = nn.Unflatten(-1, (8,8))(z)
-            train_data.append(z.cpu())
+            train_data.append(z.detach().cpu())
         train_data = torch.cat(train_data, dim=0).unsqueeze(1) # Shape: (num_samples, 1, latent_dim)
         print(f"Encoded training data shape: {train_data.shape}") # Should be (num_samples, 1, latent_dim)
         latent_dataset = torch.utils.data.TensorDataset(train_data)
@@ -226,12 +231,6 @@ if __name__ == "__main__":
         # DDPM network
         network = Unet()
 
-        # Set the number of steps in the diffusion process
-        T = 1000
-
-        # Define model
-        model = DDPM(network, T=T).to(args.device)
-        
         # Set the number of steps in the diffusion process
         T = 1000
 
@@ -281,7 +280,10 @@ if __name__ == "__main__":
         # Generate samples
         model.eval()
         with torch.no_grad():
-            samples = (model.sample((4, D))).cpu() 
+            samples = (model.sample((4, 1, 8, 8))).cpu() 
+
+        # Samples must be reshaped to (4, 64) before passing to decoder network
+        samples = samples.view(samples.shape[0], -1) # Reshape to (4, 64)
 
         # Pass samples to decoder to get images
         # Loading VAE model
@@ -310,14 +312,19 @@ if __name__ == "__main__":
 
         # Define VAE model
         encoder = GaussianEncoder(encoder_net)
-        decoder = BernoulliDecoder(decoder_net, out_type=args.mnist_type)
-        vae_model = VAE(prior, decoder, encoder, prior_type=args.prior).to(args.device)
+        if args.mnist_type == 'binarized':
+            decoder = BernoulliDecoder(decoder_net)
+        else:            
+            decoder = GaussianDecoder(decoder_net)
+
+        vae_model = VAE(prior, decoder, encoder, beta=args.beta).to(args.device)
         vae_model.load_state_dict(torch.load(args.vae_model, map_location=torch.device(args.device)))
 
         vae_model.eval()
         with torch.no_grad():
-            samples = vae_model.decoder(samples.to(args.device)).cpu()
+            samples = vae_model.decoder(samples.to(args.device)).sample().cpu() # Shape: (4, 1, 28, 28)
         
+        print(f"Decoded samples shape: {samples.shape}") # Should be (4, 28, 28)
         # Plot first samples
         fig, axes = plt.subplots(1, 4, figsize=(5, 5))
         for i in range(4):
