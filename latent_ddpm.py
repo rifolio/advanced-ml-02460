@@ -9,7 +9,7 @@ import torchvision
 from tqdm import tqdm
 from unet import LatentUnet
 from vae_combined import VAE, GaussianPrior, GaussianEncoder, BernoulliDecoder, GaussianDecoder
-
+import time
 class DDPM(nn.Module):
     def __init__(self, network, beta_1=1e-4, beta_T=2e-2, T=100):
         """
@@ -158,7 +158,9 @@ if __name__ == "__main__":
     # Parse arguments
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'debug'], help='what to do when running the script (default: %(default)s)')
+    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'debug', 'speed'], help='what to do when running the script (default: %(default)s)')
+    parser.add_argument('--speed-total', type=int, default=1000)
+    parser.add_argument('--speed-batch', type=int, default=64)
     parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
     parser.add_argument('--vae-model', type=str, default='model_gaussian.pt', help='file to save model to or load model from (default: %(default)s)')
     parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
@@ -214,7 +216,7 @@ if __name__ == "__main__":
 
         transform = transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: x.squeeze())])
 
-        mnist_train_loader = torch.utils.data.DataLoader(datasets.MNIST('data/', train=True, download=True, transform=transform))
+        mnist_train_loader = torch.utils.data.DataLoader(datasets.MNIST('data/', batch_size=args.batch_size, train=True, download=True, transform=transform))
         # Pre-compute the latent representations of the training data using the VAE encoder
         train_data = []
         for x, _ in tqdm(mnist_train_loader, desc="Encoding training data with VAE"):
@@ -333,3 +335,62 @@ if __name__ == "__main__":
             axes[i].axis('off')
         plt.savefig("mean_" + args.samples)
         plt.close()
+
+    elif args.mode == 'speed':
+        def _sync(device):
+            if device.type == "cuda": torch.cuda.synchronize()
+            elif device.type == "mps":
+                try: torch.mps.synchronize()
+                except: pass
+
+        @torch.no_grad()
+        def measure_sps(sample_fn, total_samples, batch_size, device, warmup=5):
+            for _ in range(warmup):
+                _ = sample_fn(batch_size)
+
+            _sync(device)
+            n, t0 = 0, time.perf_counter()
+
+            while n < total_samples:
+                b = min(batch_size, total_samples - n)
+                _ = sample_fn(b)
+                n += b
+
+            _sync(device)
+            t1 = time.perf_counter()
+
+            return total_samples/(t1-t0), (t1-t0)
+
+        device = torch.device(args.device)
+
+        network = LatentUnet()
+        model = DDPM(network, T=1000).to(device)
+        model.load_state_dict(torch.load(args.model, map_location=device))
+        model.eval()
+
+        M = args.latent_dim
+        prior = GaussianPrior(M)
+        encoder_net = nn.Sequential(
+            nn.Flatten(), nn.Linear(784,512), nn.ReLU(),
+            nn.Linear(512,512), nn.ReLU(),
+            nn.Linear(512, M*2),
+        )
+        decoder_net = nn.Sequential(
+            nn.Linear(M,512), nn.ReLU(),
+            nn.Linear(512,512), nn.ReLU(),
+            nn.Linear(512,784), nn.Unflatten(-1,(28,28))
+        )
+        encoder = GaussianEncoder(encoder_net)
+        decoder = GaussianDecoder(decoder_net)  
+        vae_model = VAE(prior, decoder, encoder, beta=args.beta).to(device)
+        vae_model.load_state_dict(torch.load(args.vae_model, map_location=device))
+        vae_model.eval()
+
+        def latent_ddpm_sample_fn(b):
+            z = model.sample((b, 1, 8, 8))     
+            z = z.view(b, -1)                  
+            x = vae_model.decoder(z).sample()  
+            return x
+
+        sps, elapsed = measure_sps(latent_ddpm_sample_fn, args.speed_total, args.speed_batch, device)
+        print(f"Latent DDPM sampling (incl decode): {sps:.2f} samples/sec (elapsed {elapsed:.2f}s)")

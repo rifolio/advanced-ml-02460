@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import torchvision
 from tqdm import tqdm
 from unet import Unet
+import time
 
 
 class DDPM(nn.Module):
@@ -158,7 +159,9 @@ if __name__ == "__main__":
     # Parse arguments
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'debug'], help='what to do when running the script (default: %(default)s)')
+    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'debug', 'speed'], help='what to do when running the script (default: %(default)s)')
+    parser.add_argument('--speed-total', type=int, default=1000)
+    parser.add_argument('--speed-batch', type=int, default=64)
     parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
     parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
@@ -257,3 +260,56 @@ if __name__ == "__main__":
             axes[i].axis('off')
         plt.savefig(args.samples)
         plt.close()
+
+    elif args.mode == 'speed':
+        def _sync(device_str):
+            if device_str == "cuda":
+                torch.cuda.synchronize()
+            elif device_str == "mps":
+                try:
+                    torch.mps.synchronize()
+                except Exception:
+                    pass
+
+        @torch.no_grad()
+        def measure_sps(sample_fn, total_samples, batch_size, device_str, warmup_batches=3):
+            
+            for _ in range(warmup_batches):
+                _ = sample_fn(batch_size)
+            _sync(device_str)
+
+            n = 0
+            t0 = time.perf_counter()
+            while n < total_samples:
+                b = min(batch_size, total_samples - n)
+                _ = sample_fn(b)
+                n += b
+            _sync(device_str)
+            t1 = time.perf_counter()
+
+            elapsed = t1 - t0
+            return total_samples / elapsed, elapsed
+
+        D = 28 * 28
+        network = Unet()
+
+       
+        T = 1000
+        model = DDPM(network, T=T).to(args.device)
+
+        
+        model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
+        model.eval()
+
+        def ddpm_sample_fn(b):
+            return model.sample((b, D))
+
+        sps, elapsed = measure_sps(
+            ddpm_sample_fn,
+            total_samples=args.speed_total,
+            batch_size=args.speed_batch,
+            device_str=args.device,
+        )
+
+        print(f"Loaded model: {args.model}")
+        print(f"DDPM sampling speed (T={T}): {sps:.3f} samples/sec  (elapsed {elapsed:.2f}s for {args.speed_total})")

@@ -11,6 +11,7 @@ import torch.utils.data
 from torch.distributions.mixture_same_family import MixtureSameFamily
 from torch.nn import functional as F
 from tqdm import tqdm
+import time
 
 
 # =============================================================================
@@ -504,7 +505,9 @@ if __name__ == "__main__":
     # Parse arguments
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'plot'], help='what to do when running the script (default: %(default)s)')
+    parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'plot', 'speed'], help='what to do when running the script (default: %(default)s)')
+    parser.add_argument('--speed-total', type=int, default=10000)
+    parser.add_argument('--speed-batch', type=int, default=512)
     parser.add_argument('--output-dir', type=str, default='outputs', help='base directory for models, samples, and plots (default: %(default)s)')
     parser.add_argument('--model', type=str, default=None, help='file to save model to or load model from (default: outputs/models/model_{prior}.pt)')
     parser.add_argument('--samples', type=str, default=None, help='file to save samples in (default: outputs/samples/samples_{prior}.png)')
@@ -780,3 +783,40 @@ if __name__ == "__main__":
         prior_post_path = _path_with_run(args.plot_prior_posterior, args.run)
         _plot_prior_posterior(model, mnist_test_loader, device, prior_post_path, args.prior, args.projection, args.run, _plot_title_parts())
         print(f"Prior vs aggregate posterior plot saved to {prior_post_path}")
+    
+    elif args.mode == 'speed':
+        def _sync(device):
+            if device.type == "cuda": torch.cuda.synchronize()
+            elif device.type == "mps":
+                try: torch.mps.synchronize()
+                except: pass
+
+        @torch.no_grad()
+        def measure_sps(sample_fn, total_samples, batch_size, device, warmup=10):
+            for _ in range(warmup):
+                _ = sample_fn(batch_size)
+
+            _sync(device)
+            n, t0 = 0, time.perf_counter()
+
+            while n < total_samples:
+                b = min(batch_size, total_samples - n)
+                _ = sample_fn(b)
+                n += b
+
+            _sync(device)
+            t1 = time.perf_counter()
+            
+            return total_samples/(t1-t0), (t1-t0)
+
+        model_path = _path_with_run(args.model, args.run)
+        model = _build_model()
+        model.load_state_dict(torch.load(model_path, map_location=torch.device(args.device)))
+        model.eval()
+        device = torch.device(args.device)
+
+        def vae_sample_fn(b):
+            return model.sample(b)
+
+        sps, elapsed = measure_sps(vae_sample_fn, args.speed_total, args.speed_batch, device)
+        print(f"VAE sampling: {sps:.1f} samples/sec (elapsed {elapsed:.2f}s)")
