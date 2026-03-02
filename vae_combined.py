@@ -527,17 +527,20 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     # Default paths: save into output_dir subfolders
+    # Include mnist_type for new runs so binarized/original don't overwrite each other
     models_dir = os.path.join(args.output_dir, 'models')
     samples_dir = os.path.join(args.output_dir, 'samples')
     plots_dir = os.path.join(args.output_dir, 'plots')
+    _beta_str = f'beta{int(args.beta) if args.beta == int(args.beta) else args.beta}'
+    _path_suffix = f'{args.prior}_{args.mnist_type}_{_beta_str}'
     if args.model is None:
-        args.model = os.path.join(models_dir, f'model_{args.prior}.pt')
+        args.model = os.path.join(models_dir, f'model_{_path_suffix}.pt')
     if args.plot_loss is None:
-        args.plot_loss = os.path.join(plots_dir, f'loss_curve_{args.prior}.png')
+        args.plot_loss = os.path.join(plots_dir, f'loss_curve_{_path_suffix}.png')
     if args.plot_prior_posterior is None:
-        args.plot_prior_posterior = os.path.join(plots_dir, f'prior_posterior_{args.prior}.png')
+        args.plot_prior_posterior = os.path.join(plots_dir, f'prior_posterior_{_path_suffix}.png')
     if args.samples is None:
-        args.samples = os.path.join(samples_dir, f'samples_{args.prior}.png')
+        args.samples = os.path.join(samples_dir, f'samples_{_path_suffix}.png')
     print('# Options')
     for key, value in sorted(vars(args).items()):
         print(key, '=', value)
@@ -564,6 +567,16 @@ if __name__ == "__main__":
         """Add _run{N} suffix before extension for multi-run outputs."""
         base, ext = os.path.splitext(path)
         return f"{base}_run{run_idx}{ext}"
+
+    def _plot_title_parts():
+        """Build plot title parts: beta, decoder type, MNIST type."""
+        decoder_name = 'Bernoulli' if args.mnist_type == 'binarized' else 'Gaussian'
+        parts = []
+        if args.beta != 1.0:
+            parts.append(f'β={args.beta}')
+        parts.append(f'{decoder_name} decoder')
+        parts.append(f'MNIST {args.mnist_type}')
+        return ', '.join(parts)
 
     def _build_model():
         """Build a fresh VAE model from scratch (used for each run)."""
@@ -614,7 +627,7 @@ if __name__ == "__main__":
         enc = GaussianEncoder(encoder_net)
         return VAE(p, dec, enc, args.beta).to(device)
 
-    def _plot_prior_posterior(model, test_loader, dev, save_path, prior_name, proj, run_idx=None):
+    def _plot_prior_posterior(model, test_loader, dev, save_path, prior_name, proj, run_idx=None, title_extra=''):
         """Plot prior vs aggregate posterior and save to save_path."""
         model.eval()
         latents = []
@@ -644,7 +657,10 @@ if __name__ == "__main__":
         plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], alpha=0.3, s=10, c='orange', label='Aggregate posterior q(z)')
         plt.xlabel('Dimension 1')
         plt.ylabel('Dimension 2')
-        title = f'Prior vs Aggregate Posterior - {prior_name} prior ({proj} projection)'
+        title = f'Prior vs Aggregate Posterior - {prior_name} prior'
+        if title_extra:
+            title += f', {title_extra}'
+        title += f' ({proj} projection)'
         if run_idx is not None:
             title += f' (run {run_idx})'
         plt.title(title)
@@ -685,7 +701,8 @@ if __name__ == "__main__":
             plt.plot(test_losses, 'r-', linewidth=2, label='Test')
             plt.xlabel('Epoch')
             plt.ylabel('Loss (negative ELBO)')
-            plt.title(f'Train & Test Loss - {args.prior} prior (run {run_idx})')
+            title_parts = _plot_title_parts()
+            plt.title(f'Train & Test Loss - {args.prior} prior, {title_parts} (run {run_idx})')
             plt.legend()
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
@@ -694,7 +711,7 @@ if __name__ == "__main__":
             print(f"Loss curve saved to {plot_loss_path}")
 
             prior_post_path = _path_with_run(args.plot_prior_posterior, run_idx)
-            _plot_prior_posterior(model, mnist_test_loader, device, prior_post_path, args.prior, args.projection, run_idx)
+            _plot_prior_posterior(model, mnist_test_loader, device, prior_post_path, args.prior, args.projection, run_idx, _plot_title_parts())
             print(f"Prior vs aggregate posterior saved to {prior_post_path}")
 
             model.eval()
@@ -718,6 +735,18 @@ if __name__ == "__main__":
         model_path = _path_with_run(args.model, args.run)
         if not os.path.exists(model_path) and args.run == 1:
             model_path = args.model  # fallback for legacy models without run suffix
+        # Fallback to legacy paths (without beta, without mnist_type) for backward compatibility
+        if not os.path.exists(model_path):
+            for legacy_base in [
+                os.path.join(models_dir, f'model_{args.prior}_{args.mnist_type}'),
+                os.path.join(models_dir, f'model_{args.prior}'),
+            ]:
+                for cand in [f'{legacy_base}_run{args.run}.pt', f'{legacy_base}.pt']:
+                    if os.path.exists(cand):
+                        model_path = cand
+                        break
+                if os.path.exists(model_path):
+                    break
         model = _build_model()
         model.load_state_dict(torch.load(model_path, map_location=torch.device(args.device)))
         model.eval()
@@ -734,8 +763,20 @@ if __name__ == "__main__":
         model_path = _path_with_run(args.model, args.run)
         if not os.path.exists(model_path) and args.run == 1:
             model_path = args.model  # fallback for legacy models without run suffix
+        # Fallback to legacy paths (without beta, without mnist_type) for backward compatibility
+        if not os.path.exists(model_path):
+            for legacy_base in [
+                os.path.join(models_dir, f'model_{args.prior}_{args.mnist_type}'),
+                os.path.join(models_dir, f'model_{args.prior}'),
+            ]:
+                for cand in [f'{legacy_base}_run{args.run}.pt', f'{legacy_base}.pt']:
+                    if os.path.exists(cand):
+                        model_path = cand
+                        break
+                if os.path.exists(model_path):
+                    break
         model = _build_model()
         model.load_state_dict(torch.load(model_path, map_location=torch.device(args.device)))
         prior_post_path = _path_with_run(args.plot_prior_posterior, args.run)
-        _plot_prior_posterior(model, mnist_test_loader, device, prior_post_path, args.prior, args.projection, args.run)
+        _plot_prior_posterior(model, mnist_test_loader, device, prior_post_path, args.prior, args.projection, args.run, _plot_title_parts())
         print(f"Prior vs aggregate posterior plot saved to {prior_post_path}")
