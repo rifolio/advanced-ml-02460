@@ -96,11 +96,11 @@ python latent_ddpm.py sample --vae-model outputs/models/model_gaussian_run1.pt -
 
 
 ## Sampling wall clock times
-Table of wall clock times for sampling 4 images from the trained models:
+Table of wall clock times for sampling 4 images from the trained models, 1000 speed-total and 256 speed-batch:
 | Model           | Samples per second |
 |-----------------|--------------------|
-| VAE (Gaussian)  | 173168.3           |
+| VAE (Gaussian)  | 174910.8           |
 | VAE (MoG)       | -                  |
 | VAE (Flow)      | -                  |
-| DDPM            | 5.091              |
-| Latent DDPM     | 53.58              | 
+| DDPM            | 4.620              |
+| Latent DDPM     | 72.27              | 
