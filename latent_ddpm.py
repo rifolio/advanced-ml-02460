@@ -398,7 +398,10 @@ if __name__ == "__main__":
         vae_model.eval()
 
         def latent_ddpm_sample_fn(b):
-            z = model.sample((b, 1, 8, 8))     
+            z = model.sample((b, 1, 8, 8))   
+            # Denormalize samples using the saved mean and std from training
+            stats = torch.load('latent_stats.pt')
+            z = z * stats['z_std'] + stats['z_mean']  
             z = z.view(b, -1)                  
             x = vae_model.decoder(z).sample()  
             return x
