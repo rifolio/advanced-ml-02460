@@ -216,7 +216,7 @@ if __name__ == "__main__":
 
         transform = transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: x.squeeze())])
 
-        mnist_train_loader = torch.utils.data.DataLoader(datasets.MNIST('data/', batch_size=args.batch_size, train=True, download=True, transform=transform))
+        mnist_train_loader = torch.utils.data.DataLoader(datasets.MNIST('data/', train=True, download=True, transform=transform), batch_size=args.batch_size, shuffle=True)
         # Pre-compute the latent representations of the training data using the VAE encoder
         train_data = []
         for x, _ in tqdm(mnist_train_loader, desc="Encoding training data with VAE"):
@@ -226,6 +226,15 @@ if __name__ == "__main__":
             z = nn.Unflatten(-1, (8,8))(z)
             train_data.append(z.detach().cpu())
         train_data = torch.cat(train_data, dim=0).unsqueeze(1) # Shape: (num_samples, 1, latent_dim)
+        
+        # Normalize latent representations to be in the range [0, 1]
+        z_mean = train_data.mean()
+        z_std = train_data.std()
+        train_data = (train_data - z_mean) / z_std
+
+        # Save for sampling
+        torch.save({'z_mean': z_mean, 'z_std': z_std}, 'latent_stats.pt')
+        
         print(f"Encoded training data shape: {train_data.shape}") # Should be (num_samples, 1, latent_dim)
         latent_dataset = torch.utils.data.TensorDataset(train_data)
         latent_loader = torch.utils.data.DataLoader(latent_dataset, batch_size=args.batch_size, shuffle=True)
@@ -274,7 +283,9 @@ if __name__ == "__main__":
         model.eval()
         with torch.no_grad():
             samples = (model.sample((4, 1, 8, 8))).cpu() 
-
+            # Denormalize samples using the saved mean and std from training
+            stats = torch.load('latent_stats.pt')
+            samples = samples * stats['z_std'] + stats['z_mean']
         # Samples must be reshaped to (4, 64) before passing to decoder network
         samples = samples.view(samples.shape[0], -1) # Reshape to (4, 64)
 
