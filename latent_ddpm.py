@@ -362,11 +362,12 @@ if __name__ == "__main__":
 
             _sync(device)
             n, t0 = 0, time.perf_counter()
-
-            while n < total_samples:
-                b = min(batch_size, total_samples - n)
-                _ = sample_fn(b)
-                n += b
+            with tqdm(total = total_samples, desc="Measuring speed") as pbar:
+                while n < total_samples:
+                    b = min(batch_size, total_samples - n)
+                    _ = sample_fn(b)
+                    n += b
+                    pbar.update(b)
 
             _sync(device)
             t1 = time.perf_counter()
@@ -400,7 +401,7 @@ if __name__ == "__main__":
 
         def latent_ddpm_sample_fn(b):
             z = model.sample((b, 1, 8, 8))   
-            # Denormalize samples using the saved mean and std from training
+            
             stats = torch.load('latent_stats.pt')
             z = z * stats['z_std'] + stats['z_mean']  
             z = z.view(b, -1)                  

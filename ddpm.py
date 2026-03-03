@@ -280,10 +280,12 @@ if __name__ == "__main__":
 
             n = 0
             t0 = time.perf_counter()
-            while n < total_samples:
-                b = min(batch_size, total_samples - n)
-                _ = sample_fn(b)
-                n += b
+            with tqdm(total = total_samples, desc="Measuring speed") as pbar:
+                while n < total_samples:
+                    b = min(batch_size, total_samples - n)
+                    _ = sample_fn(b)
+                    n += b
+                    pbar.update(b)
             _sync(device_str)
             t1 = time.perf_counter()
 
