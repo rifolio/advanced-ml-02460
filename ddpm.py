@@ -77,16 +77,13 @@ class DDPM(nn.Module):
         # Sample x_t given x_{t+1} until x_0 is sampled
         for t in range(self.T-1, -1, -1): # Inverse loop from T-1 to 0
             ### Implement the remaining of Algorithm 2 here ###
+            t_norm = torch.full((shape[0], 1), t / (self.T - 1), device=self.alpha.device)
+            epsilon_theta = self.network(x_t, t_norm)
+            mean = (x_t - (1 - self.alpha[t]) / torch.sqrt(1 - self.alpha_cumprod[t]) * epsilon_theta) / torch.sqrt(self.alpha[t])
+            variance = self.beta[t]
             if t > 0:
-                t_norm = torch.full((shape[0], 1), t / (self.T - 1), device=self.alpha.device)
-                epsilon_theta = self.network(x_t, t_norm)
-                mean = (x_t - (1 - self.alpha[t]) / torch.sqrt(1 - self.alpha_cumprod[t]) * epsilon_theta) / torch.sqrt(self.alpha[t])
-                variance = self.beta[t]
                 x_t = mean + torch.sqrt(variance) * torch.randn_like(x_t)
             else:
-                t_norm = torch.full((shape[0], 1), t / (self.T - 1), device=self.alpha.device)
-                epsilon_theta = self.network(x_t, t_norm)
-                mean = (x_t - (1 - self.alpha[t]) / torch.sqrt(1 - self.alpha_cumprod[t]) * epsilon_theta) / torch.sqrt(self.alpha[t])
                 x_t = mean # When t=0, we do not add noise
 
         return x_t
