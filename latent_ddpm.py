@@ -163,6 +163,7 @@ if __name__ == "__main__":
     parser.add_argument('--speed-batch', type=int, default=64)
     parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
     parser.add_argument('--vae-model', type=str, default='model_gaussian.pt', help='file to save model to or load model from (default: %(default)s)')
+    parser.add_argument('--latent-stats', type=str, default='latent_stats.pt', help='file to save latent normalization stats to or load normalization stats from (default: %(default)s)')
     parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
     parser.add_argument('--device', type=str, default='cpu', choices=['cpu', 'cuda', 'mps'], help='torch device (default: %(default)s)')
     parser.add_argument('--batch-size', type=int, default=64, metavar='N', help='batch size for training (default: %(default)s)')
@@ -233,7 +234,7 @@ if __name__ == "__main__":
         train_data = (train_data - z_mean) / z_std
 
         # Save for sampling
-        torch.save({'z_mean': z_mean, 'z_std': z_std}, 'latent_stats.pt')
+        torch.save({'z_mean': z_mean, 'z_std': z_std}, args.latent_stats)
         
         print(f"Encoded training data shape: {train_data.shape}") # Should be (num_samples, 1, latent_dim)
         latent_dataset = torch.utils.data.TensorDataset(train_data)
@@ -284,7 +285,7 @@ if __name__ == "__main__":
         with torch.no_grad():
             samples = (model.sample((4, 1, 8, 8))).cpu() 
             # Denormalize samples using the saved mean and std from training
-            stats = torch.load('latent_stats.pt')
+            stats = torch.load(args.latent_stats)
             samples = samples * stats['z_std'] + stats['z_mean']
         # Samples must be reshaped to (4, 64) before passing to decoder network
         samples = samples.view(samples.shape[0], -1) # Reshape to (4, 64)

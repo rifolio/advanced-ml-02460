@@ -85,13 +85,13 @@ Run the latent DDPM using the trained VAE encoder to generate samples in the lat
 ### Training
 
 ```bash
-python latent_ddpm.py train --vae-model outputs/models/model_gaussian_run1.pt --batch-size 256 --epochs 50
+python latent_ddpm.py train --vae-model outputs/models/model_gaussian_original_beta0.999_run1.pt --batch-size 256 --epochs 50
 ```
 
 ### Sampling
 
 ```bash
-python latent_ddpm.py sample --vae-model outputs/models/model_gaussian_run1.pt --batch-size 256 
+python latent_ddpm.py sample --model outputs/models/model_latent_ddpm.pt --vae-model outputs/models/model_gaussian_original_beta0.999_run1.pt
 ```
 
 
