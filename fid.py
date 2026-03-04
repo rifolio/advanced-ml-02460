@@ -70,8 +70,8 @@ def compute_fid(
 
     # ---- calculate latent features with classifier ----
     with torch.no_grad():
-        real_latent = clf.layers(x_real)
-        gen_latent = clf.layers(x_gen)
+        real_latent = clf.layers(x_real.to(device))
+        gen_latent = clf.layers(x_gen.to(device))
     real_latent = real_latent.cpu().numpy()
     gen_latent = gen_latent.cpu().numpy()
 
