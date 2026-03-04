@@ -41,7 +41,11 @@ def frechet_distance(x_a, x_b):
 
     diff = mu_a - mu_b
     covmean = scipy.linalg.sqrtm(sigma_a @ sigma_b)
-    return np.sum(diff**2) + np.trace(sigma_a + sigma_b - 2.0 * covmean)
+    # sqrtm can return complex; take real part for FID
+    if np.iscomplexobj(covmean):
+        covmean = covmean.real
+    fid = np.sum(diff**2) + np.trace(sigma_a + sigma_b - 2.0 * covmean)
+    return float(np.real(fid))
 
 
 def compute_fid(
