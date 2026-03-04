@@ -229,7 +229,7 @@ if __name__ == "__main__":
     parser.add_argument('mode', type=str, default='train', choices=['train', 'sample', 'debug', 'speed'], help='what to do when running the script (default: %(default)s)')
     parser.add_argument('--speed-total', type=int, default=1000)
     parser.add_argument('--speed-batch', type=int, default=64)
-    parser.add_argument('--model', type=str, default='model.pt', help='file to save model to or load model from (default: %(default)s)')
+    parser.add_argument('--model', type=str, default='model_latent_ddpm.pt', help='file to save model to or load model from (default: %(default)s)')
     parser.add_argument('--vae-model', type=str, default='model_gaussian.pt', help='file to save model to or load model from (default: %(default)s)')
     parser.add_argument('--latent-stats', type=str, default='latent_stats.pt', help='file to save latent normalization stats to or load normalization stats from (default: %(default)s)')
     parser.add_argument('--samples', type=str, default='samples.png', help='file to save samples in (default: %(default)s)')
@@ -302,7 +302,7 @@ if __name__ == "__main__":
         train_data = (train_data - z_mean) / z_std
 
         # Save for sampling
-        torch.save({'z_mean': z_mean, 'z_std': z_std}, args.latent_stats)
+        torch.save({'z_mean': z_mean, 'z_std': z_std}, f"outputs/models/{args.beta}_{args.latent_stats}")
         
         print(f"Encoded training data shape: {train_data.shape}") # Should be (num_samples, 1, latent_dim)
         latent_dataset = torch.utils.data.TensorDataset(train_data)
@@ -331,7 +331,7 @@ if __name__ == "__main__":
         plt.close()
 
         # Save model
-        torch.save(model.state_dict(), args.model)
+        torch.save(model.state_dict(), f"outputs/models/{args.beta}_{args.model}")
     
     elif args.mode == 'sample':
         import matplotlib.pyplot as plt
@@ -346,14 +346,14 @@ if __name__ == "__main__":
         model = DDPM(network, T=T).to(args.device)
 
         # Load the model
-        model.load_state_dict(torch.load(args.model, map_location=torch.device(args.device)))
+        model.load_state_dict(torch.load(f"outputs/models/{args.beta}_{args.model}", map_location=torch.device(args.device)))
 
         # Generate samples
         model.eval()
         with torch.no_grad():
             samples = (model.sample((4, 1, 8, 8))).cpu() 
             # Denormalize samples using the saved mean and std from training
-            stats = torch.load(args.latent_stats)
+            stats = torch.load(f"outputs/models/{args.beta}_{args.latent_stats}")
             samples = samples * stats['z_std'] + stats['z_mean']
         # Samples must be reshaped to (4, 64) before passing to decoder network
         samples = samples.view(samples.shape[0], -1) # Reshape to (4, 64)
