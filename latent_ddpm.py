@@ -147,6 +147,77 @@ def train(model, optimizer, data_loader, epochs, device):
         
     return losses
 
+
+def plot_distributions(ddpm_model, vae_model, stats, mnist_loader, beta, device='cpu'):
+    """
+    Plot the prior from beta-VAE, and learned latent DDPM distribution against aggregate posterior.
+    Parameters:
+    model: [DDPM]
+        The trained DDPM model.
+    vae_model: [VAE]
+        The trained VAE model.
+    stats: [dict]
+        The latent normalization stats (mean and std) used for training the DDPM. Used to denormalize DDPM samples for plotting.
+    mnist_loader: [torch.utils.data.DataLoader]
+        The data loader for the MNIST dataset.
+    """
+    vae_model.eval()
+    ddpm_model.eval()
+
+    device = torch.device(device)
+
+    # Encode a batch of MNIST data to get samples from the aggregate posterior
+    posterior_samples = []
+    with torch.no_grad():
+        for x, _ in tqdm(mnist_loader, desc="Encoding MNIST for aggregate posterior"):
+            x = x.to(device)
+            z = vae_model.encoder(x).rsample()
+            posterior_samples.append(z.cpu())
+    posterior_samples = torch.cat(posterior_samples, dim=0).numpy()
+    posterior_samples = posterior_samples[:1000] # Use only a subset of samples for plotting
+    n_samples = posterior_samples.shape[0]
+    print(f"Number of samples for plotting: {n_samples}")
+
+    # Sample from the prior (beta-VAE)
+    prior_samples = vae_model.prior.sample(n_samples).cpu().numpy()
+
+
+    # Sample from the learned latent DDPM distribution
+    with torch.no_grad():
+        ddpm_samples = ddpm_model.sample((n_samples, 1, 8, 8)).cpu()
+        ddpm_samples = ddpm_samples * stats['z_std'] + stats['z_mean']
+        ddpm_samples = ddpm_samples.view(n_samples, -1).numpy()
+    
+    # Plot the distributions using PCA
+    center = posterior_samples.mean(axis=0)
+    z_posterior_centered = posterior_samples - center
+    _, _, Vt = torch.linalg.svd(torch.from_numpy(z_posterior_centered).float(), full_matrices=False)
+    components = Vt[:2].T.numpy()
+    posterior_2d = z_posterior_centered @ components
+
+    center = prior_samples.mean(axis=0)
+    z_prior_centered = prior_samples - center
+    _, _, Vt = torch.linalg.svd(torch.from_numpy(z_prior_centered).float(), full_matrices=False)
+    components = Vt[:2].T.numpy()
+    prior_2d = z_prior_centered @ components
+
+    center = ddpm_samples.mean(axis=0)
+    z_ddpm_centered = ddpm_samples - center
+    _, _, Vt = torch.linalg.svd(torch.from_numpy(z_ddpm_centered).float(), full_matrices=False)
+    components = Vt[:2].T.numpy()
+    ddpm_2d = z_ddpm_centered @ components
+
+    plt.figure(figsize=(8, 4))
+    plt.scatter(posterior_2d[:, 0], posterior_2d[:, 1], alpha=0.3, s=10, c='blue', label='Aggregate Posterior')
+    plt.scatter(prior_2d[:, 0], prior_2d[:, 1], alpha=0.3, s=10, c='orange', label='Prior')
+    plt.scatter(ddpm_2d[:, 0], ddpm_2d[:, 1], alpha=0.3, s=10, c='red', label='DDPM')
+    plt.legend()
+    plt.xlabel('First Principal Component')
+    plt.ylabel('Second Principal Component')
+    plt.title(f'Latent Space Distributions (β={beta})')
+    plt.savefig(f'latent_distributions_beta_{beta}.png')
+    plt.close()
+
 if __name__ == "__main__":
     import torch.utils.data
     from torchvision import datasets, transforms
@@ -344,6 +415,12 @@ if __name__ == "__main__":
             axes[i].axis('off')
         plt.savefig("mean_" + args.samples)
         plt.close()
+
+        # Plot prior from beta-VAE, and learned latent DDPM distribution against aggregate posterior
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: x.squeeze())])
+        mnist_train_loader = torch.utils.data.DataLoader(datasets.MNIST('data/', train=True, download=True, transform=transform), batch_size=args.batch_size, shuffle=True)
+        
+        plot_distributions(model, vae_model, stats, mnist_train_loader, args.beta, device=args.device) 
 
     elif args.mode == 'speed':
         def _sync(device):
